@@ -1,83 +1,47 @@
-// Service Worker v7 - Fixed for GitHub Pages subpath /portfolio/
-const CACHE_NAME = 'portfolio-v7';
+const CACHE = 'portfolio-v8';
+const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
-// Use relative paths - works regardless of deployment path
-const CORE_ASSETS = [
-  './',
-  './index.html',
-  './manifest.json',
-  './icon-192.png',
-  './icon-512.png'
-];
-
-// Install: cache core assets
-self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(CORE_ASSETS))
+self.addEventListener('install', e => {
+  e.waitUntil(
+    caches.open(CACHE)
+      .then(c => c.addAll(ASSETS))
       .then(() => self.skipWaiting())
-      .catch(err => {
-        console.log('SW install cache error (non-fatal):', err);
-        return self.skipWaiting();
-      })
+      .catch(() => self.skipWaiting())
   );
 });
 
-// Activate: clean old caches
-self.addEventListener('activate', event => {
-  event.waitUntil(
+self.addEventListener('activate', e => {
+  e.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(
-        keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key))
-      ))
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
 
-// Fetch: network-first for APIs, cache-first for app shell
-self.addEventListener('fetch', event => {
-  const url = event.request.url;
-
-  // Always use network for external APIs (stock prices etc.)
-  const isExternal = (
-    url.includes('yahoo.com') ||
-    url.includes('twse.com.tw') ||
-    url.includes('tpex.org.tw') ||
-    url.includes('allorigins.win') ||
-    url.includes('corsproxy.io') ||
-    url.includes('codetabs.com') ||
-    url.includes('jsdelivr.net') ||
-    url.includes('cdn.')
-  );
+self.addEventListener('fetch', e => {
+  const url = e.request.url;
+  // Pass through all external API calls (stock prices, crypto, etc.)
+  const isExternal = [
+    'yahoo.com','twse.com.tw','tpex.org.tw','binance.com',
+    'coingecko.com','allorigins.win','corsproxy.io','codetabs.com',
+    'jsdelivr.net','cdn.','stooq.com'
+  ].some(d => url.includes(d));
 
   if (isExternal) {
-    event.respondWith(
-      fetch(event.request).catch(() =>
-        new Response('{}', { headers: { 'Content-Type': 'application/json' } })
-      )
-    );
+    e.respondWith(fetch(e.request).catch(() => new Response('{}', {headers:{'Content-Type':'application/json'}})));
     return;
   }
 
-  // Cache-first for app shell (works offline)
-  event.respondWith(
-    caches.match(event.request)
-      .then(cached => {
-        if (cached) return cached;
-        return fetch(event.request).then(response => {
-          // Only cache successful same-origin responses
-          if (response.ok && response.type !== 'opaque') {
-            const responseClone = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put(event.request, responseClone));
-          }
-          return response;
-        });
-      })
-      .catch(() => {
-        // Offline fallback: return cached index.html for navigation
-        if (event.request.mode === 'navigate') {
-          return caches.match('./index.html');
+  e.respondWith(
+    caches.match(e.request).then(cached => {
+      if (cached) return cached;
+      return fetch(e.request).then(resp => {
+        if (resp.ok) {
+          const clone = resp.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
         }
-      })
+        return resp;
+      });
+    }).catch(() => caches.match('./index.html'))
   );
 });

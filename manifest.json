@@ -1,7 +1,7 @@
 {
   "name": "資產管理",
   "short_name": "資產管理",
-  "description": "台股資產管理、即時股價、質押追蹤",
+  "description": "台股、虛擬貨幣、多組合資產管理",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
