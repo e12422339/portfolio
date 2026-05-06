@@ -20,6 +20,9 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <style>
 :root{
   --bg:#0f1117;--bg2:#181c27;--bg3:#1e2333;--bg4:#242840;
@@ -303,6 +306,12 @@ tbody tr:hover td{background:rgba(255,255,255,.02)}
       <button class="btn btn-outline btn-sm" onclick="fetchAllPrices()" title="更新股價">🔄</button>
     </div>
     <div id="hdr-date" style="font-size:10px;color:var(--text3);margin-top:4px;text-align:center"></div>
+    <!-- 同步狀態 -->
+    <div id="sync-bar" style="margin-top:6px;padding:4px 8px;border-radius:6px;font-size:10px;display:flex;align-items:center;gap:5px;background:var(--bg3)">
+      <span id="sync-dot" style="width:6px;height:6px;border-radius:50%;background:var(--text3);flex-shrink:0"></span>
+      <span id="sync-txt">同步中…</span>
+      <button onclick="manualSync()" style="margin-left:auto;background:none;border:none;color:var(--text3);font-size:11px;cursor:pointer;padding:0" title="立即同步">↑↓</button>
+    </div>
   </div>
 </nav>
 
@@ -321,9 +330,11 @@ tbody tr:hover td{background:rgba(255,255,255,.02)}
     </div>
   </div>
   <div class="mrow" id="mp"></div>
-  <div class="add-form">
+  <div class="add-form" id="add-form-wrap">
     <h3 id="add-form-title">新增買入</h3>
-    <div class="frow">
+
+    <!-- 一般股票表單 -->
+    <div class="frow" id="form-stock">
       <div class="ff"><label id="add-code-label">代號</label>
         <div class="sym-wrap">
           <input id="fc" style="width:110px" placeholder="2330" oninput="onCI()" onkeydown="onCK(event)" autocomplete="off">
@@ -337,15 +348,69 @@ tbody tr:hover td{background:rgba(255,255,255,.02)}
       <div class="ff"><label>分類</label><select id="fcat" style="width:100px"></select></div>
       <button class="btn btn-primary" style="align-self:flex-end" onclick="addBuy()">買入 ＋</button>
     </div>
+
+    <!-- 虛擬貨幣表單 -->
+    <div id="form-crypto" style="display:none">
+      <!-- 行 1：標的 + 方向 -->
+      <div class="frow" style="margin-bottom:10px">
+        <div class="ff"><label>交易對</label>
+          <div class="sym-wrap">
+            <input id="cc-pair" style="width:120px" placeholder="BTCUSDT" oninput="onCI()" onkeydown="onCK(event)" autocomplete="off">
+            <div class="sym-drop" id="sdrop"></div>
+          </div>
+        </div>
+        <div class="ff"><label>名稱</label><input id="cc-name" style="width:140px" placeholder="（自動帶入）"></div>
+        <div class="ff"><label>方向</label>
+          <select id="cc-dir" style="width:90px" onchange="updateCryptoForm()">
+            <option value="spot">現貨</option>
+            <option value="long">合約做多 ▲</option>
+            <option value="short">合約做空 ▼</option>
+          </select>
+        </div>
+        <div class="ff" id="cc-lev-wrap" style="display:none"><label>槓桿</label>
+          <select id="cc-lev" style="width:70px">
+            <option>1x</option><option>2x</option><option>3x</option><option>5x</option>
+            <option>10x</option><option>20x</option><option>50x</option><option>100x</option>
+          </select>
+        </div>
+      </div>
+      <!-- 行 2：金額 + 購入貨幣 + 開倉價 + 算出幣數 -->
+      <div class="frow" style="margin-bottom:10px;align-items:flex-end">
+        <div class="ff"><label>投入金額</label>
+          <input id="cc-amount" style="width:110px" type="number" step="0.01" placeholder="500" oninput="calcCryptoQty()">
+        </div>
+        <div class="ff"><label>計價貨幣</label>
+          <select id="cc-stable" style="width:90px" onchange="calcCryptoQty()">
+            <option value="USDT">USDT</option>
+            <option value="USDC">USDC</option>
+            <option value="BUSD">BUSD</option>
+            <option value="USD">USD</option>
+          </select>
+        </div>
+        <div class="ff"><label>開倉價（USDT）</label>
+          <input id="cc-entry" style="width:120px" type="number" step="0.00001" placeholder="自動帶入" oninput="calcCryptoQty()">
+        </div>
+        <div class="ff"><label>數量（幣）</label>
+          <input id="cc-qty" style="width:110px" type="number" step="0.000001" placeholder="自動計算" oninput="calcCryptoAmount()">
+        </div>
+        <div class="ff"><label>日期</label><input id="cc-date" style="width:136px" type="date"></div>
+        <div class="ff"><label>分類</label><select id="cc-cat" style="width:100px"></select></div>
+      </div>
+      <!-- 預覽列 -->
+      <div id="cc-preview" style="background:var(--bg3);border-radius:var(--rsm);padding:8px 12px;font-size:12px;color:var(--text2);margin-bottom:10px;min-height:28px;display:flex;gap:16px;flex-wrap:wrap"></div>
+      <!-- 合約資訊 -->
+      <div id="cc-contract-info" style="display:none;background:rgba(167,139,250,.08);border:1px solid rgba(167,139,250,.2);border-radius:var(--rsm);padding:8px 12px;font-size:12px;margin-bottom:10px;display:flex;gap:16px;flex-wrap:wrap"></div>
+      <button class="btn btn-primary" onclick="addCryptoBuy()">買入 ＋</button>
+    </div>
   </div>
   <div class="chart-area" id="chart-area"></div>
   <div class="panel">
     <div class="panel-h"><span class="panel-t">持倉明細</span></div>
     <div class="tw">
       <table>
-        <thead><tr>
-          <th>名稱</th><th>代號/交易對</th><th>分類</th><th>數量</th><th>均價</th><th>總成本</th>
-          <th>目前價格</th><th>市值</th><th>未實現損益</th><th>損益率</th><th>明細</th><th>操作</th>
+        <thead><tr id="tbh-head">
+          <th>名稱</th><th>代號/交易對</th><th>分類</th><th id="th-qty">數量</th><th id="th-price">均價</th><th id="th-cost">成本</th>
+          <th id="th-curprice">目前價格</th><th id="th-mv">市值</th><th id="th-pnl">未實現損益</th><th>損益率</th><th>明細</th><th>操作</th>
         </tr></thead>
         <tbody id="tbh"></tbody>
       </table>
@@ -1046,9 +1111,175 @@ const SHIST=[
 ];
 
 /* ══ STATE ══ */
+/* ══════════════════════════════════════
+   FIREBASE SYNC
+   localStorage = 即時本地快取（離線可用）
+   Firestore    = 雲端同步（跨裝置）
+══════════════════════════════════════ */
+const FB_CFG = {
+  apiKey: "AIzaSyDcHFwE74xxK-qQBr8aruDF1RcqRopqHcY",
+  authDomain: "my-portfolio-8f8be.firebaseapp.com",
+  projectId: "my-portfolio-8f8be",
+  storageBucket: "my-portfolio-8f8be.firebasestorage.app",
+  messagingSenderId: "522638687906",
+  appId: "1:522638687906:web:7082cc9950dd37dfaf61fb"
+};
+
+// Fixed user ID (single-user app, no auth needed)
+const UID = 'user_default';
+
+let _fbApp=null, _db=null, _fbReady=false, _syncTimer=null;
+
+function initFirebase(){
+  try{
+    _fbApp = firebase.initializeApp(FB_CFG);
+    _db = firebase.firestore();
+    _fbReady = true;
+    setSyncStatus('connecting','連線中…');
+    // Pull latest from cloud on startup
+    fbPullAll().then(()=>{
+      setSyncStatus('ok','已同步');
+      // Listen for real-time updates from other devices
+      fbListenMeta();
+    }).catch(e=>{
+      setSyncStatus('offline','離線模式');
+    });
+  }catch(e){
+    console.warn('Firebase init failed:',e);
+    setSyncStatus('offline','離線模式');
+  }
+}
+
+function setSyncStatus(state, text){
+  const dot=document.getElementById('sync-dot');
+  const txt=document.getElementById('sync-txt');
+  if(!dot||!txt) return;
+  const colors={ok:'var(--green)',connecting:'var(--gold)',offline:'var(--text3)',error:'var(--red)',syncing:'var(--accent)'};
+  dot.style.background=colors[state]||colors.offline;
+  txt.textContent=text;
+  if(state==='syncing') dot.style.animation='pulse 1s infinite';
+  else dot.style.animation='';
+}
+
+/* ── Push to Firestore ── */
+async function fbPushPool(id, data){
+  if(!_fbReady) return;
+  try{
+    // Strip large price cache before saving (each device fetches own prices)
+    const toSave={...data, prices:{}};
+    await _db.collection('users').doc(UID).collection('pools').doc(id).set(toSave);
+  }catch(e){console.warn('fbPush pool error:',e);}
+}
+
+async function fbPushMeta(){
+  if(!_fbReady) return;
+  try{
+    await _db.collection('users').doc(UID).set({pools:_pools, updatedAt:Date.now()},{merge:true});
+  }catch(e){console.warn('fbPush meta error:',e);}
+}
+
+/* ── Pull from Firestore ── */
+async function fbPullAll(){
+  if(!_fbReady) throw new Error('not ready');
+  setSyncStatus('syncing','同步中…');
+
+  // Pull meta (pool list)
+  const metaDoc = await _db.collection('users').doc(UID).get();
+  if(metaDoc.exists){
+    const remote = metaDoc.data();
+    const remotePools = remote.pools;
+    if(remotePools && remotePools.length){
+      // Merge: remote wins for metadata, but keep local if newer
+      const localUpdated = parseInt(localStorage.getItem('pm_updated')||'0');
+      const remoteUpdated = remote.updatedAt||0;
+      if(remoteUpdated > localUpdated){
+        _pools = remotePools;
+        saveMeta(_pools);
+        localStorage.setItem('pm_updated', remoteUpdated);
+      }
+    }
+  }
+
+  // Pull each pool's data
+  for(const p of _pools){
+    try{
+      const doc = await _db.collection('users').doc(UID).collection('pools').doc(p.id).get();
+      if(doc.exists){
+        const remoteData = doc.data();
+        const localData = loadPool(p.id);
+        // Compare by a simple version counter
+        const remoteV = remoteData._v||0;
+        const localV = localData?._v||0;
+        if(remoteV >= localV){
+          // Restore prices from localStorage (don't overwrite with empty)
+          remoteData.prices = localData?.prices||{};
+          savePool(p.id, remoteData);
+        }
+      }
+    }catch(e){console.warn('fbPull pool error:',e);}
+  }
+
+  // Reload active pool data
+  ST = loadPool(_activePoolId) || defaultPoolData(false);
+  renderPoolBar();
+  render();
+  setSyncStatus('ok',`已同步 ${new Date().toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'})}`);
+}
+
+/* ── Real-time listener for meta changes (other device switched pool) ── */
+let _metaListener=null;
+function fbListenMeta(){
+  if(!_fbReady) return;
+  if(_metaListener) _metaListener(); // unsubscribe old
+  _metaListener = _db.collection('users').doc(UID)
+    .onSnapshot(snap=>{
+      if(!snap.exists) return;
+      const remote = snap.data();
+      const remotePools = remote.pools;
+      const remoteUpdated = remote.updatedAt||0;
+      const localUpdated = parseInt(localStorage.getItem('pm_updated')||'0');
+      if(remotePools && remoteUpdated > localUpdated + 2000){ // 2s grace period
+        _pools = remotePools;
+        saveMeta(_pools);
+        localStorage.setItem('pm_updated', remoteUpdated);
+        renderPoolBar();
+        setSyncStatus('ok','已同步（其他裝置更新）');
+      }
+    }, e=>setSyncStatus('offline','離線模式'));
+}
+
+/* ── Debounced auto-sync (called after every sv()) ── */
+function scheduleSync(){
+  if(!_fbReady) return;
+  clearTimeout(_syncTimer);
+  _syncTimer = setTimeout(async()=>{
+    setSyncStatus('syncing','同步中…');
+    try{
+      await fbPushPool(_activePoolId, ST);
+      await fbPushMeta();
+      localStorage.setItem('pm_updated', Date.now());
+      setSyncStatus('ok',`已同步 ${new Date().toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'})}`);
+    }catch(e){
+      setSyncStatus('error','同步失敗，將重試');
+      setTimeout(scheduleSync, 10000);
+    }
+  }, 1500); // 1.5s debounce
+}
+
+async function manualSync(){
+  setSyncStatus('syncing','同步中…');
+  try{
+    await fbPushPool(_activePoolId, ST);
+    await fbPushMeta();
+    await fbPullAll();
+  }catch(e){
+    setSyncStatus('error','同步失敗');
+  }
+}
+
 /* ══ 多組合 STATE MANAGEMENT ══ */
-const STORE_META = 'pm_meta_v1';   // 組合清單 [{id, name, icon}]
-const STORE_PRE  = 'pm_pool_v1_'; // 每個組合的資料前綴
+const STORE_META = 'pm_meta_v1';
+const STORE_PRE  = 'pm_pool_v1_';
 
 function defaultPoolData(useSeeds=false){
   if(useSeeds) return{
@@ -1062,7 +1293,12 @@ function loadMeta(){
   try{const s=localStorage.getItem(STORE_META);if(s)return JSON.parse(s);}catch(e){}
   return null;
 }
-function saveMeta(meta){try{localStorage.setItem(STORE_META,JSON.stringify(meta));}catch(e){}}
+function saveMeta(meta){
+  try{localStorage.setItem(STORE_META,JSON.stringify(meta));}catch(e){}
+  // Push to Firebase (debounced)
+  clearTimeout(_syncTimer);
+  _syncTimer=setTimeout(()=>{fbPushMeta().catch(()=>{});},1500);
+}
 
 function loadPool(id){
   try{const s=localStorage.getItem(STORE_PRE+id);if(s)return JSON.parse(s);}catch(e){}
@@ -1091,7 +1327,11 @@ function bootstrap(){
 let _pools = bootstrap();          // [{id,name,icon}]
 let _activePoolId = _pools[0].id;
 
-function sv(){ savePool(_activePoolId, ST); }
+function sv(){
+  ST._v = (ST._v||0) + 1; // version counter for conflict resolution
+  savePool(_activePoolId, ST);
+  scheduleSync(); // async push to Firebase
+}
 function loadState(){ return loadPool(_activePoolId) || defaultPoolData(false); }
 
 let ST = loadState();
@@ -1281,11 +1521,12 @@ function _guessCat(code, name=''){
 }
 
 function onCI(){
-  const v=document.getElementById('fc').value.trim().toUpperCase();
-  const dr=document.getElementById('sdrop');
-  if(!v){dr.classList.remove('show');return;}
   const pool=_pools.find(p=>p.id===_activePoolId);
   const isCrypto=pool?.type==='crypto';
+  const inputEl=isCrypto?document.getElementById('cc-pair'):document.getElementById('fc');
+  const v=(inputEl?.value||'').trim().toUpperCase();
+  const dr=document.getElementById('sdrop');
+  if(!v){dr.classList.remove('show');return;}
   const isForex=pool?.type==='forex';
 
   if(isCrypto){
@@ -1378,19 +1619,32 @@ function onCI(){
 }
 function onCK(e){
   if(e.key==='Enter'){
-    const v=document.getElementById('fc').value.trim().toUpperCase();
-    if(SDB[v])selSym(v,SDB[v].n,SDB[v].cat);
-    else document.getElementById('sdrop').classList.remove('show');
+    const v=(document.getElementById('fc')||document.getElementById('cc-pair'))?.value.trim().toUpperCase();
+    if(v&&SDB[v])selSym(v,SDB[v].n,SDB[v].cat);
+    document.getElementById('sdrop').classList.remove('show');
   }
   if(e.key==='Escape')document.getElementById('sdrop').classList.remove('show');
 }
 function selSym(code,name,cat){
-  document.getElementById('fc').value=code;
-  document.getElementById('fn').value=name;
-  const s=document.getElementById('fcat');
-  if(allCats().includes(cat))s.value=cat;
+  const pool=_pools.find(p=>p.id===_activePoolId);
+  const isCrypto=pool?.type==='crypto';
+  if(isCrypto){
+    const pairEl=document.getElementById('cc-pair');
+    const nameEl=document.getElementById('cc-name');
+    if(pairEl) pairEl.value=code;
+    if(nameEl) nameEl.value=name;
+    // Auto-fill entry price if we have it
+    const curPrice=ST.prices[code.toUpperCase()];
+    if(curPrice){const entEl=document.getElementById('cc-entry');if(entEl&&!entEl.value)entEl.value=curPrice;}
+  } else {
+    document.getElementById('fc').value=code;
+    document.getElementById('fn').value=name;
+    const s=document.getElementById('fcat');
+    if(s&&allCats().includes(cat))s.value=cat;
+    document.getElementById('fp')?.focus();
+  }
   document.getElementById('sdrop').classList.remove('show');
-  document.getElementById('fp').focus();
+  calcCryptoQty();
 }
 document.addEventListener('click',e=>{if(!e.target.closest('.sym-wrap'))document.getElementById('sdrop').classList.remove('show');});
 
@@ -1564,6 +1818,177 @@ async function fetchAllPrices(){
 
 /* ══ ADD BUY ══ */
 document.getElementById('fd').value=td();
+/* ══ CRYPTO FORM LOGIC ══ */
+let _usdtRate=1; // USDC/BUSD/USD → USDT rate (fetched live)
+let _stableRates={USDT:1,USDC:1,BUSD:1,USD:1};
+
+async function fetchStableRates(){
+  // Fetch USDC/USDT price from Binance
+  try{
+    const proxies=['https://api.allorigins.win/raw?url=','https://corsproxy.io/?url='];
+    for(const px of proxies){
+      const r=await fetch(px+encodeURIComponent('https://api.binance.com/api/v3/ticker/price?symbol=USDCUSDT'),{signal:AbortSignal.timeout(5000)});
+      if(!r.ok) continue;
+      const d=await r.json();
+      if(d.price){_stableRates.USDC=parseFloat(d.price);break;}
+    }
+  }catch(e){}
+}
+
+function toUSDT(amount, stable){
+  return amount * (_stableRates[stable]||1);
+}
+
+function updateCryptoForm(){
+  const dir=document.getElementById('cc-dir')?.value;
+  const levWrap=document.getElementById('cc-lev-wrap');
+  const contractInfo=document.getElementById('cc-contract-info');
+  if(levWrap) levWrap.style.display=(dir==='long'||dir==='short')?'':'none';
+  if(contractInfo) contractInfo.style.display=(dir==='long'||dir==='short')?'flex':'none';
+  calcCryptoQty();
+}
+
+function calcCryptoQty(){
+  const amount=parseFloat(document.getElementById('cc-amount')?.value)||0;
+  const stable=document.getElementById('cc-stable')?.value||'USDT';
+  const entry=parseFloat(document.getElementById('cc-entry')?.value)||
+    parseFloat(ST.prices[document.getElementById('cc-pair')?.value?.toUpperCase()]||0);
+  const amountUSDT=toUSDT(amount,stable);
+
+  const prev=document.getElementById('cc-preview');
+  const cinf=document.getElementById('cc-contract-info');
+
+  if(!amount||!entry){
+    if(prev) prev.textContent='請輸入投入金額與開倉價';
+    return;
+  }
+
+  const qty=amountUSDT/entry;
+  const qtyEl=document.getElementById('cc-qty');
+  if(qtyEl&&!qtyEl._userEdited) qtyEl.value=qty.toFixed(6);
+
+  // Stablecoin conversion display
+  let prevHTML=`<span>投入 <strong style="color:var(--gold)">${fN(amount,2)} ${stable}</strong></span>`;
+  if(stable!=='USDT') prevHTML+=`<span>≈ <strong style="color:var(--gold)">${fN(amountUSDT,2)} USDT</strong></span>`;
+  prevHTML+=`<span>開倉價 <strong>${fN(entry,4)}</strong> USDT</span>`;
+  prevHTML+=`<span>可買 <strong style="color:var(--green)">${fN(qty,6)}</strong> 幣</span>`;
+  if(prev) prev.innerHTML=prevHTML;
+
+  // Contract info
+  const dir=document.getElementById('cc-dir')?.value;
+  if((dir==='long'||dir==='short')&&cinf){
+    const levStr=document.getElementById('cc-lev')?.value||'1x';
+    const lev=parseInt(levStr)||1;
+    const notional=amountUSDT*lev;
+    const liqPct=1/lev*0.9; // approx 90% of margin
+    const liqPrice=dir==='long'? entry*(1-liqPct) : entry*(1+liqPct);
+    cinf.style.display='flex';
+    cinf.innerHTML=`
+      <span>方向 <strong style="color:${dir==='long'?'var(--green)':'var(--red)'}">${dir==='long'?'做多 ▲':'做空 ▼'}</strong></span>
+      <span>槓桿 <strong style="color:var(--purple)">${levStr}</strong></span>
+      <span>名義價值 <strong>${fN(notional,2)} USDT</strong></span>
+      <span>估算強平價 <strong style="color:var(--red)">${fN(liqPrice,4)}</strong></span>`;
+  }
+}
+
+function calcCryptoAmount(){
+  const qty=parseFloat(document.getElementById('cc-qty')?.value)||0;
+  const entry=parseFloat(document.getElementById('cc-entry')?.value)||0;
+  const stable=document.getElementById('cc-stable')?.value||'USDT';
+  const el=document.getElementById('cc-qty');
+  if(el) el._userEdited=true;
+  if(!qty||!entry) return;
+  const amountUSDT=qty*entry;
+  const amountInStable=amountUSDT/(_stableRates[stable]||1);
+  const amEl=document.getElementById('cc-amount');
+  if(amEl&&!amEl._userEdited) amEl.value=amountInStable.toFixed(2);
+  calcCryptoQty();
+}
+
+function addCryptoBuy(){
+  const pair=document.getElementById('cc-pair').value.trim().toUpperCase();
+  const name=document.getElementById('cc-name').value.trim()||pair;
+  const amount=parseFloat(document.getElementById('cc-amount').value)||0;
+  const stable=document.getElementById('cc-stable').value||'USDT';
+  const entryRaw=parseFloat(document.getElementById('cc-entry').value)||0;
+  const qtyRaw=parseFloat(document.getElementById('cc-qty').value)||0;
+  const date=document.getElementById('cc-date').value;
+  const cat=document.getElementById('cc-cat').value||'虛擬貨幣';
+  const dir=document.getElementById('cc-dir').value;
+  const lev=parseInt(document.getElementById('cc-lev')?.value)||1;
+
+  if(!pair){alert('請輸入交易對');return;}
+  if(!amount&&!qtyRaw){alert('請輸入投入金額或數量');return;}
+  if(!entryRaw){alert('請輸入開倉價');return;}
+  if(!date){alert('請選擇日期');return;}
+
+  const amountUSDT=toUSDT(amount||qtyRaw*entryRaw, stable);
+  const qty=qtyRaw||(amountUSDT/entryRaw);
+  const avgPriceUSDT=entryRaw;
+
+  // Extra info for contracts
+  const extra=dir!=='spot'?{dir,lev,stable,amountOrig:amount,stableCoin:stable}:{stable,amountOrig:amount,stableCoin:stable};
+
+  const idx=ST.holdings.findIndex(h=>h.code===pair);
+  if(idx>=0){
+    const h=ST.holdings[idx];
+    const prevCostUSDT=h.costUSDT||h.cost;
+    const newCostUSDT=prevCostUSDT+amountUSDT;
+    h.shares+=qty;
+    h.avgPrice=newCostUSDT/h.shares;
+    h.cost=newCostUSDT; h.costUSDT=newCostUSDT;
+    h.buys.push({shares:qty,price:avgPriceUSDT,date,amountUSDT,stable,...extra});
+  } else {
+    ST.holdings.push({
+      sym:name, code:pair, shares:qty, avgPrice:avgPriceUSDT,
+      cost:amountUSDT, costUSDT:amountUSDT, date, cat,
+      isCrypto:true,
+      buys:[{shares:qty,price:avgPriceUSDT,date,amountUSDT,stable,...extra}]
+    });
+  }
+  sv(); render();
+  // Reset form
+  ['cc-pair','cc-name','cc-amount','cc-entry','cc-qty'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el){el.value='';el._userEdited=false;}
+  });
+  document.getElementById('cc-preview').innerHTML='';
+}
+
+/* ══ POOL-AWARE FORM TOGGLE ══ */
+function updateFormMode(){
+  const pool=_pools.find(p=>p.id===_activePoolId);
+  const isCrypto=pool?.type==='crypto';
+  document.getElementById('form-stock').style.display=isCrypto?'none':'';
+  document.getElementById('form-crypto').style.display=isCrypto?'':'none';
+  // Sync cat select
+  const ccCat=document.getElementById('cc-cat');
+  if(ccCat){ccCat.innerHTML=allCats().map(c=>`<option value="${c}">${c}</option>`).join('');}
+  if(isCrypto) fetchStableRates().then(()=>calcCryptoQty());
+  // Update table headers
+  const thCost=document.getElementById('th-cost');
+  const thMV=document.getElementById('th-mv');
+  const thPNL=document.getElementById('th-pnl');
+  const thQty=document.getElementById('th-qty');
+  const thPrice=document.getElementById('th-price');
+  const thCurPrice=document.getElementById('th-curprice');
+  if(isCrypto){
+    if(thCost) thCost.textContent='成本(USDT)';
+    if(thMV) thMV.textContent='市值(USDT)';
+    if(thPNL) thPNL.textContent='損益(USDT)';
+    if(thQty) thQty.textContent='數量(幣)';
+    if(thPrice) thPrice.textContent='均價(USDT)';
+    if(thCurPrice) thCurPrice.textContent='目前價(USDT)';
+  } else {
+    if(thCost) thCost.textContent='總成本';
+    if(thMV) thMV.textContent='市值';
+    if(thPNL) thPNL.textContent='未實現損益';
+    if(thQty) thQty.textContent='數量';
+    if(thPrice) thPrice.textContent='均價';
+    if(thCurPrice) thCurPrice.textContent='目前價格';
+  }
+}
+
 function addBuy(){
   const code=document.getElementById('fc').value.trim().toUpperCase();
   const symRaw=document.getElementById('fn').value.trim();
@@ -1585,6 +2010,84 @@ function addBuy(){
   sv();render();
   document.getElementById('fc').value='';document.getElementById('fn').value='';
   document.getElementById('fs').value='';document.getElementById('fp').value='';
+}
+
+/* ── USDT-aware metric cards ── */
+function rMetP(){
+  const pool=_pools.find(p=>p.id===_activePoolId);
+  const isCrypto=pool?.type==='crypto';
+  const unit=isCrypto?'USDT':'NT$';
+  const fmt=v=>isCrypto?`${fN(v,2)} ${unit}`:fM(v);
+
+  const tc=ST.holdings.reduce((s,h)=>s+(h.costUSDT||h.cost),0);
+  const tmv=ST.holdings.reduce((s,h)=>s+getCP(h)*h.shares,0);
+  const pnl=tmv-tc;const pct=tc?pnl/tc*100:0;
+  document.getElementById('mp').innerHTML=`
+    <div class="mc"><div class="lbl">持倉</div><div class="val">${ST.holdings.length} ${isCrypto?'種':'檔'}</div></div>
+    <div class="mc"><div class="lbl">總成本 (${unit})</div><div class="val" style="font-size:${isCrypto?'14':'16'}px">${fmt(tc)}</div></div>
+    <div class="mc"><div class="lbl">總市值 (${unit})</div><div class="val" style="font-size:${isCrypto?'14':'16'}px">${fmt(tmv)}</div></div>
+    <div class="mc ${pnl>=0?'green':'red'}"><div class="lbl">未實現損益 (${unit})</div><div class="val" style="font-size:${isCrypto?'14':'15'}px">${pnl>=0?'+':'−'}${fmt(Math.abs(pnl))}</div><div class="sub">${fP(pct)}</div></div>`;
+}
+
+function rHoldings(){
+  const tb=document.getElementById('tbh');
+  if(!tb) return;
+  const pool=_pools.find(p=>p.id===_activePoolId);
+  const isCrypto=pool?.type==='crypto';
+  updateFormMode();
+  if(!ST.holdings.length){
+    tb.innerHTML=`<tr><td colspan="12" style="text-align:center;padding:30px;color:var(--text3)">尚無持倉，請使用上方表單新增</td></tr>`;
+    return;
+  }
+  tb.innerHTML=ST.holdings.map((h,i)=>{
+    const cp=getCP(h);
+    const mv=cp*h.shares;
+    const cost=h.costUSDT||h.cost;
+    const pnl=mv-cost;
+    const pct=cost?pnl/cost*100:0;
+    const hasFetch=ST.prices[h.code]!=null;
+    const color=gc(h.cat||'個股');
+    const buyCount=h.buys?h.buys.length:1;
+
+    // Direction badge for contracts
+    let dirBadge='';
+    const lastBuy=h.buys?.[h.buys.length-1];
+    if(lastBuy?.dir==='long') dirBadge=`<span style="font-size:10px;background:rgba(46,204,138,.2);color:var(--green);padding:1px 5px;border-radius:4px;margin-left:4px">多▲</span>`;
+    if(lastBuy?.dir==='short') dirBadge=`<span style="font-size:10px;background:rgba(240,82,82,.2);color:var(--red);padding:1px 5px;border-radius:4px;margin-left:4px">空▼</span>`;
+
+    const codeDisplay=isCrypto
+      ?`<span style="font-size:11px;color:var(--gold);font-weight:600">${h.code||''}</span>`
+      :`<span style="font-size:12px;color:var(--text3)">${h.code||'—'}</span>`;
+
+    const qtyDisplay=isCrypto?fN(h.shares,6):fN(h.shares,0);
+    const avgDisplay=isCrypto?fN(h.avgPrice,4):fN(h.avgPrice,4);
+    const costDisplay=isCrypto?`${fN(cost,2)} U`:fM(cost);
+    const mvDisplay=isCrypto?`${fN(mv,2)} U`:fM(mv);
+    const pnlDisplay=isCrypto?`${pnl>=0?'+':'−'}${fN(Math.abs(pnl),2)} U`:`${pnl>=0?'+':'−'}${fM(Math.abs(pnl))}`;
+    const priceStep=isCrypto?'0.000001':'0.01';
+
+    return `<tr>
+      <td class="sym-cell">${h.sym}${dirBadge}${hasFetch?` <span style="font-size:10px;color:var(--green)">●</span>`:''}  </td>
+      <td>${codeDisplay}</td>
+      <td><span class="ctag" style="background:${color}22;color:${color};border:1px solid ${color}44">${h.cat||'個股'}</span></td>
+      <td>${qtyDisplay}</td>
+      <td>${avgDisplay}</td>
+      <td>${costDisplay}</td>
+      <td>
+        <input class="pinp" type="number" step="${priceStep}"
+          value="${hasFetch?cp:''}"
+          placeholder="${isCrypto?fN(h.avgPrice,4):fN(h.avgPrice,2)}"
+          onchange="mprice(${i},this.value)"
+          style="${hasFetch?'border-color:rgba(46,204,138,.4)':''}">
+        ${hasFetch?`<span style="font-size:10px;color:var(--green);margin-left:3px">↑</span>`:''}
+      </td>
+      <td>${mvDisplay}</td>
+      <td class="${pnl>=0?'pos':'neg'}">${pnlDisplay}</td>
+      <td class="${pnl>=0?'pos':'neg'}">${fP(pct)}</td>
+      <td><button class="btn btn-outline btn-sm" onclick="openBuyDetail(${i})">📋 ${buyCount}筆</button></td>
+      <td><button class="btn btn-danger" onclick="openSell(${i})">賣出</button></td>
+    </tr>`;
+  }).join('');
 }
 
 /* ══ SELL ══ */
@@ -2155,7 +2658,7 @@ function render(){
   updatePoolPageHeader();
   const ap=document.querySelector('.page.active');if(!ap)return;
   const id=ap.id;
-  if(id==='page-portfolio'){rMetP();rHoldings();rCharts();}
+  if(id==='page-portfolio'){updateFormMode();rMetP();rHoldings();rCharts();}
   if(id==='page-pledge'){rPledge();}
   if(id==='page-history'){rMetH();rHistory();}
   if(id==='page-categories')renderCats();
@@ -2826,6 +3329,21 @@ function switchPool(id){
   renderPoolBar();
   render();
   if(window.innerWidth<=768) closeSidebar();
+  // Pull latest for this pool from Firebase
+  if(_fbReady){
+    _db.collection('users').doc(UID).collection('pools').doc(id).get()
+      .then(doc=>{
+        if(!doc.exists) return;
+        const remoteData=doc.data();
+        if((remoteData._v||0)>(ST._v||0)){
+          remoteData.prices=ST.prices||{};
+          ST=remoteData;
+          savePool(id,ST);
+          render();
+          setSyncStatus('ok','已同步最新資料');
+        }
+      }).catch(()=>{});
+  }
 }
 
 function openPoolMgr(){
@@ -2966,6 +3484,9 @@ setTimeout(fetchAllPrices, 700);
 document.addEventListener('change',e=>{
   if(e.target.closest('#pledge-stocks-check')) calcPledgePreview();
 });
+
+// Init Firebase sync (after UI is ready)
+setTimeout(initFirebase, 500);
 
 
 /* ══ Service Worker Registration ══ */
