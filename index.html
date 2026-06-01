@@ -1531,28 +1531,75 @@ function _guessCat(code, name=''){
 let _usStockCache={};
 async function lookupUSStock(query){
   if(_usStockCache[query]) return _usStockCache[query];
-  const proxies=['https://api.allorigins.win/raw?url=','https://corsproxy.io/?url='];
+
+  const proxies=[
+    'https://api.allorigins.win/raw?url=',
+    'https://corsproxy.io/?url=',
+    'https://api.codetabs.com/v1/proxy?quest=',
+    'https://thingproxy.freeboard.io/fetch/',
+  ];
+
+  // Strategy 1: Yahoo Finance search API
   for(const proxy of proxies){
     try{
       const url=`https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&lang=en-US&region=US&quotesCount=8&newsCount=0&listsCount=0`;
-      const r=await fetch(proxy+encodeURIComponent(url),{signal:AbortSignal.timeout(8000)});
+      const r=await fetch(proxy+encodeURIComponent(url),{signal:AbortSignal.timeout(9000)});
       if(!r.ok) continue;
       const txt=await r.text();
-      if(!txt||txt.startsWith('<')) continue;
+      if(!txt||txt.startsWith('<')||!txt.includes('quotes')) continue;
       const d=JSON.parse(txt);
       const quotes=d?.quotes?.filter(q=>q.quoteType&&q.symbol&&!q.symbol.includes('^'));
       if(!quotes?.length) continue;
-      const results=quotes.slice(0,6).map(q=>{
-        const isETF=q.quoteType==='ETF';
-        const isMutual=q.quoteType==='MUTUALFUND';
-        const cat=isETF?'ETF':isMutual?'Fund':'Stock';
-        const type=isETF?'ETF':isMutual?'Fund':'Stock';
-        return{code:q.symbol, name:q.longname||q.shortname||q.symbol, cat, type};
+      const results=quotes.slice(0,8).map(q=>{
+        const t=q.quoteType||'';
+        const cat=t==='ETF'?'ETF':t==='MUTUALFUND'?'Fund':'Stock';
+        return{code:q.symbol,name:q.longname||q.shortname||q.symbol,cat,type:cat};
       });
       _usStockCache[query]=results;
       return results;
     }catch(e){continue;}
   }
+
+  // Strategy 2: Try direct chart fetch (validates ticker exists + gets name)
+  for(const proxy of proxies){
+    try{
+      const url=`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(query)}?interval=1d&range=1d`;
+      const r=await fetch(proxy+encodeURIComponent(url),{signal:AbortSignal.timeout(9000)});
+      if(!r.ok) continue;
+      const txt=await r.text();
+      if(!txt||txt.startsWith('<')) continue;
+      const d=JSON.parse(txt);
+      const meta=d?.chart?.result?.[0]?.meta;
+      if(!meta||!meta.symbol) continue;
+      const name=meta.longName||meta.shortName||meta.symbol;
+      const isETF=(meta.instrumentType||'').toUpperCase().includes('ETF');
+      const cat=isETF?'ETF':'Stock';
+      const results=[{code:meta.symbol,name,cat,type:cat}];
+      _usStockCache[query]=results;
+      return results;
+    }catch(e){continue;}
+  }
+
+  // Strategy 3: query2 endpoint fallback
+  for(const proxy of proxies){
+    try{
+      const url=`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=6&newsCount=0`;
+      const r=await fetch(proxy+encodeURIComponent(url),{signal:AbortSignal.timeout(9000)});
+      if(!r.ok) continue;
+      const txt=await r.text();
+      if(!txt||txt.startsWith('<')||!txt.includes('quotes')) continue;
+      const d=JSON.parse(txt);
+      const quotes=d?.quotes?.filter(q=>q.quoteType&&q.symbol);
+      if(!quotes?.length) continue;
+      const results=quotes.slice(0,6).map(q=>{
+        const cat=q.quoteType==='ETF'?'ETF':q.quoteType==='MUTUALFUND'?'Fund':'Stock';
+        return{code:q.symbol,name:q.longname||q.shortname||q.symbol,cat,type:cat};
+      });
+      _usStockCache[query]=results;
+      return results;
+    }catch(e){continue;}
+  }
+
   return null;
 }
 
