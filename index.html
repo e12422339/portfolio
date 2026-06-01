@@ -265,6 +265,7 @@ tbody tr:hover td{background:rgba(255,255,255,.02)}
 .pt-fund{background:rgba(46,204,138,.15);color:var(--green)}
 .pt-forex{background:rgba(167,139,250,.15);color:var(--purple)}
 .pt-other{background:rgba(139,146,168,.15);color:var(--text2)}
+.pt-us{background:rgba(240,82,82,.15);color:var(--red)}
 .stock-check-row{display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg3);border-radius:var(--rsm);border:1px solid var(--border2);margin-bottom:8px}
 .stock-check-row input[type=number]{background:var(--bg2);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-size:13px;padding:4px 8px;width:60px;outline:none;font-family:inherit;text-align:center}
 .import-stat{padding:8px 12px;border-radius:var(--rsm);font-size:13px;margin-bottom:8px}
@@ -1344,7 +1345,13 @@ let extendIdx=null;
 /* ══ UTILS ══ */
 function td(){return new Date().toISOString().slice(0,10);}
 function fN(n,d=2){return Number(n).toLocaleString('zh-TW',{maximumFractionDigits:d});}
-function fM(n){return(n<0?'−':'')+'NT$'+Math.abs(n).toLocaleString('zh-TW',{maximumFractionDigits:0});}
+function fM(n,forceUSD=false){
+  const pool=_pools?.find(p=>p.id===_activePoolId);
+  const useUSD=forceUSD||pool?.type==='us'||pool?.type==='crypto';
+  const prefix=useUSD?'$':'NT$';
+  const decimals=useUSD?2:0;
+  return (n<0?'−':'')+prefix+Math.abs(n).toLocaleString('en-US',{maximumFractionDigits:decimals,minimumFractionDigits:decimals});
+}
 function fP(n){return(n>=0?'+':'')+Number(n).toFixed(2)+'%';}
 function fD(s){if(!s)return'—';const st=String(s);if(st.length===8)return st.slice(0,4)+'/'+st.slice(4,6)+'/'+st.slice(6);return st.replace(/-/g,'/');}
 function parseD(s){if(!s)return null;const d=String(s);if(d.length===8)return new Date(d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6));return new Date(s);}
@@ -1520,6 +1527,36 @@ function _guessCat(code, name=''){
   return '個股';
 }
 
+/* ── US Stock Lookup via Yahoo Finance search ── */
+let _usStockCache={};
+async function lookupUSStock(query){
+  if(_usStockCache[query]) return _usStockCache[query];
+  const proxies=['https://api.allorigins.win/raw?url=','https://corsproxy.io/?url='];
+  for(const proxy of proxies){
+    try{
+      const url=`https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&lang=en-US&region=US&quotesCount=8&newsCount=0&listsCount=0`;
+      const r=await fetch(proxy+encodeURIComponent(url),{signal:AbortSignal.timeout(8000)});
+      if(!r.ok) continue;
+      const txt=await r.text();
+      if(!txt||txt.startsWith('<')) continue;
+      const d=JSON.parse(txt);
+      const quotes=d?.quotes?.filter(q=>q.quoteType&&q.symbol&&!q.symbol.includes('^'));
+      if(!quotes?.length) continue;
+      const results=quotes.slice(0,6).map(q=>{
+        const isETF=q.quoteType==='ETF';
+        const isMutual=q.quoteType==='MUTUALFUND';
+        const cat=isETF?'ETF':isMutual?'Fund':'Stock';
+        const type=isETF?'ETF':isMutual?'Fund':'Stock';
+        return{code:q.symbol, name:q.longname||q.shortname||q.symbol, cat, type};
+      });
+      _usStockCache[query]=results;
+      return results;
+    }catch(e){continue;}
+  }
+  return null;
+}
+
+
 function onCI(){
   const pool=_pools.find(p=>p.id===_activePoolId);
   const isCrypto=pool?.type==='crypto';
@@ -1591,6 +1628,30 @@ function onCI(){
       <span class="sym-type pt-forex">FX</span>
     </div>`).join('');
     dr.classList.add('show');
+    return;
+  }
+
+  // ── US Stock: search Yahoo Finance directly ──
+  const isUS=(pool?.type==='us');
+  if(isUS){
+    // Show placeholder while searching
+    dr.innerHTML='<div class="sym-item" style="pointer-events:none"><span style="color:var(--text3);font-size:12px">搜尋中… (Yahoo Finance)</span></div>';
+    dr.classList.add('show');
+    lookupUSStock(v).then(results=>{
+      if(!document.getElementById('sdrop').classList.contains('show')) return;
+      if(!results||!results.length){
+        dr.innerHTML=`<div class="sym-item" onclick="selSym('${v}','${v}','Stock')">
+          <span class="sym-code" style="color:var(--red)">${v}</span>
+          <span class="sym-nm" style="color:var(--text3)">未找到，直接使用此 Ticker</span>
+          <span class="sym-type pt-us">US</span></div>`;
+        return;
+      }
+      dr.innerHTML=results.map(r=>`<div class="sym-item" onclick="selSym('${r.code}','${r.name}','${r.cat}')">
+        <span class="sym-code" style="color:var(--red)">${r.code}</span>
+        <span class="sym-nm">${r.name}</span>
+        <span class="sym-type pt-us">${r.type||'US'}</span>
+      </div>`).join('');
+    });
     return;
   }
 
@@ -1755,6 +1816,39 @@ async function fetchByYahoo(code){
   return null;
 }
 
+/* ── US Stock price via Yahoo Finance (closing price, USD) ── */
+async function fetchUSStockPrice(ticker){
+  const proxies=[
+    'https://api.allorigins.win/raw?url=',
+    'https://corsproxy.io/?url=',
+    'https://api.codetabs.com/v1/proxy?quest=',
+  ];
+  for(const proxy of proxies){
+    try{
+      const url=`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=5d`;
+      const r=await fetch(proxy+encodeURIComponent(url),{signal:AbortSignal.timeout(10000)});
+      if(!r.ok) continue;
+      const txt=await r.text();
+      if(!txt||txt.startsWith('<')) continue;
+      const d=JSON.parse(txt);
+      const result=d?.chart?.result?.[0];
+      if(!result) continue;
+      const meta=result.meta;
+      // Use regularMarketPrice (live) or previousClose (after hours)
+      const price=meta?.regularMarketPrice||meta?.previousClose||meta?.chartPreviousClose;
+      if(price&&price>0) return Math.round(price*100)/100;
+      // Fallback to last close in data
+      const closes=result.indicators?.quote?.[0]?.close;
+      if(closes?.length){
+        for(let i=closes.length-1;i>=0;i--){
+          if(closes[i]!=null&&closes[i]>0) return Math.round(closes[i]*100)/100;
+        }
+      }
+    }catch(e){continue;}
+  }
+  return null;
+}
+
 async function fetchOnePrice(code){
   // MIS batch will handle this; used only for retry
   const batch=await fetchByMIS([code]);
@@ -1783,12 +1877,26 @@ async function fetchAllPrices(){
 
   let ok=0; let fail=[];
 
+  const isUS=(pool?.type==='us');
+
   if(isCrypto){
-    // ── 虛擬貨幣報價 ──
+    // ── 虛擬貨幣報價 (Binance) ──
     const res=await fetchCryptoPrices();
     ok=res?.ok||0; fail=res?.fail||[];
+  } else if(isUS){
+    // ── 美股報價 (Yahoo Finance, USD closing price) ──
+    const codes=[...new Set(ST.holdings.map(h=>h.code).filter(Boolean))];
+    ptxt.textContent=`查詢美股報價…（${codes.length} 檔）`;
+    const batches=[];for(let i=0;i<codes.length;i+=4)batches.push(codes.slice(i,i+4));
+    for(const batch of batches){
+      const results=await Promise.all(batch.map(c=>fetchUSStockPrice(c)));
+      results.forEach((p,j)=>{
+        if(p!=null){ST.prices[batch[j]]=p;ok++;}
+        else{fail.push(batch[j]);}
+      });
+    }
   } else {
-    // ── 股票 / ETF / 基金報價 (TWSE MIS + Yahoo fallback) ──
+    // ── 台股 / ETF / 基金報價 (TWSE MIS + Yahoo fallback) ──
     const codes=[...new Set(ST.holdings.map(h=>h.code).filter(Boolean))];
     ptxt.textContent=`連線證交所…（${codes.length} 檔）`;
     const misResult=await fetchByMIS(codes);
@@ -1979,6 +2087,13 @@ function updateFormMode(){
     if(thQty) thQty.textContent='數量(幣)';
     if(thPrice) thPrice.textContent='均價(USDT)';
     if(thCurPrice) thCurPrice.textContent='目前價(USDT)';
+  } else if(pool?.type==='us'){
+    if(thCost) thCost.textContent='成本(USD)';
+    if(thMV) thMV.textContent='市值(USD)';
+    if(thPNL) thPNL.textContent='損益(USD)';
+    if(thQty) thQty.textContent='股數';
+    if(thPrice) thPrice.textContent='均價(USD)';
+    if(thCurPrice) thCurPrice.textContent='目前價(USD)';
   } else {
     if(thCost) thCost.textContent='總成本';
     if(thMV) thMV.textContent='市值';
@@ -2061,9 +2176,10 @@ function rHoldings(){
 
     const qtyDisplay=isCrypto?fN(h.shares,6):fN(h.shares,0);
     const avgDisplay=isCrypto?fN(h.avgPrice,4):fN(h.avgPrice,4);
-    const costDisplay=isCrypto?`${fN(cost,2)} U`:fM(cost);
-    const mvDisplay=isCrypto?`${fN(mv,2)} U`:fM(mv);
-    const pnlDisplay=isCrypto?`${pnl>=0?'+':'−'}${fN(Math.abs(pnl),2)} U`:`${pnl>=0?'+':'−'}${fM(Math.abs(pnl))}`;
+    const costDisplay=isCrypto?`${fN(cost,2)} USDT`:fM(cost);
+    const mvDisplay=isCrypto?`${fN(mv,2)} USDT`:fM(mv);
+    const pnlDisplay=isCrypto?`${pnl>=0?'+':'−'}${fN(Math.abs(pnl),2)} USDT`:`${pnl>=0?'+':'−'}${fM(Math.abs(pnl))}`;
+    const isUS=pool?.type==='us';
     const priceStep=isCrypto?'0.000001':'0.01';
 
     return `<tr>
@@ -3275,6 +3391,7 @@ const POOL_TYPES={
   crypto:{label:'虛擬貨幣',icon:'🪙', color:'var(--gold)',   tag:'pt-crypto', priceLabel:'幣價',  qtyLabel:'數量',  codeLabel:'交易對'},
   fund:  {label:'基金',    icon:'💰', color:'var(--green)',  tag:'pt-fund',   priceLabel:'淨值',  qtyLabel:'單位數', codeLabel:'基金代號'},
   forex: {label:'外匯',    icon:'💱', color:'var(--purple)', tag:'pt-forex',  priceLabel:'匯率',  qtyLabel:'口數',  codeLabel:'交易對'},
+  us:    {label:'美股',    icon:'🇺🇸', color:'var(--red)',   tag:'pt-us',    priceLabel:'股價(USD)', qtyLabel:'股數', codeLabel:'Ticker'},
   other: {label:'其他',    icon:'📁', color:'var(--text2)',  tag:'pt-other',  priceLabel:'價格',  qtyLabel:'數量',  codeLabel:'代號'},
 };
 
@@ -3302,6 +3419,7 @@ function updatePoolPageHeader(){
   if(fc){
     if(pool.type==='crypto') fc.placeholder='輸入交易對，如 BTCUSDT';
     else if(pool.type==='forex') fc.placeholder='輸入交易對，如 USDJPY';
+    else if(pool.type==='us') fc.placeholder='輸入 Ticker，如 AAPL、QCML';
     else fc.placeholder='輸入代號，如 2330';
   }
 }
@@ -3400,8 +3518,10 @@ function deletePoolConfirm(id){
 async function fetchCryptoPrices(){
   const codes=[...new Set(ST.holdings.map(h=>h.code).filter(Boolean))];
   if(!codes.length) return;
-  // Binance: BTCUSDT, ETHUSDT etc.
-  const binancePairs=codes.filter(c=>/^[A-Z]+USDT$|^[A-Z]+BTC$|^[A-Z]+ETH$|^[A-Z]+BNB$/.test(c));
+  // USDC is a stablecoin = 1 USDT always
+  codes.filter(c=>c==='USDC'||c==='USDCUSDT').forEach(c=>{ST.prices[c]=1;});
+  // Binance: BTCUSDT, ETHUSDT, BTCUSDC etc.
+  const binancePairs=codes.filter(c=>c!=='USDC'&&(/^[A-Z]+USDT$|^[A-Z]+USDC$|^[A-Z]+BTC$|^[A-Z]+ETH$|^[A-Z]+BNB$/.test(c)));
   const otherCodes=codes.filter(c=>!binancePairs.includes(c));
   let ok=0; const fail=[];
 
